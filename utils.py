@@ -2,9 +2,11 @@ import re
 import json
 
 
-def safe_json_loads(s):
-    # 使用正则匹配 ```json 或 ``` 包裹的内容
-    pattern = r"```(?:json)?\s*(\{.*?\})\s*```"
+def safe_json_loads(s)->dict:
+    # # 使用正则匹配 ```json 或 ``` 包裹的内容
+    # pattern = r"```(?:json)?\s*(\{.*?\})\s*```"
+    # 使用正则匹配{}包裹的内容
+    pattern = r"\{.*\}"
     match = re.search(pattern, s, re.DOTALL)
 
     if match:

@@ -110,7 +110,7 @@ class Neo4jTool:
         with self.driver.session() as session:
             node_id_map = {}  # MemorySubgraph id -> Neo4j node id
 
-            # 处理节点
+            # 处理节点，已做去重处理
             for node in memory_subgraph.get_nodes():
                 embedding = node.get("vector")
                 name = node.get("name")
@@ -125,9 +125,9 @@ class Neo4jTool:
                     node_id_map[mem_id] = neo4j_id
                 else:  # 插入新节点
                     result = session.run(f"""
-                    CREATE (c:{node_type} {{id: $id, name: $name, embedding: $embedding}})
+                    CREATE (c:{node_type} {{name: $name, embedding: $embedding}})
                     RETURN id(c) AS node_id
-                    """,id=mem_id, name=name, embedding=embedding)
+                    """,name=name, embedding=embedding)
                     node_id_map[mem_id] = result.single()["node_id"]
 
             # 处理边
@@ -153,7 +153,7 @@ class Neo4jTool:
     def _get_embedding(self, text: str) -> List[float]:
         return self.vectorizer.encode(text).tolist() 
 
-    def query_path(self, start_text, end_text, mode="shortest", max_depth=50):
+    def query_path(self, start_text, end_text, mode="random", max_depth=64) -> List[str]:
         """
         查询路径（最短路径 or 随机路径）
         返回路径的节点与边列表

@@ -3,6 +3,9 @@ import time
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import json
+
+import torch
+import tqdm
 from llm import *
 from graph import MemorySubgraph, Vectorizer
 import numpy as np
@@ -13,6 +16,7 @@ from typing import List, Dict, Any, Optional, Union
 from transformers import AutoTokenizer, AutoModel
 from langchain_core.prompts import ChatPromptTemplate
 from IPython.display import display, Markdown
+from utils import safe_json_loads
 
 def process_text_to_triplets(text: str,queue: queue.Queue) -> str:
     try:
@@ -120,6 +124,85 @@ def build_graph():
     finally:
         end_time = time.time()
         print(f"Graph built in {end_time - start_time:.2f} seconds")
+
+def json_to_formatted_text(json_data):
+    formatted_text = ""
+
+    formatted_text += f"### 核心假设\n{json_data['hypothesis']}\n\n"
+    formatted_text += f"### 可能发现\n{json_data['outcome']}\n\n"
+    formatted_text += f"### 机制\n{json_data['mechanisms']}\n\n"
+
+    formatted_text += "### 设计原则\n"
+
+    design_principles_list=json_data['design_principles']
+
+    if isinstance(design_principles_list, list):
+        for principle in design_principles_list:
+            formatted_text += f"- {principle}\n"
+    else:
+        formatted_text += f"- {design_principles_list}\n"
+
+    formatted_text += "\n"
+
+    formatted_text += f"### 额外特性\n{json_data['unexpected_properties']}\n\n"
+    formatted_text += f"### 对比\n{json_data['comparison']}\n\n"
+    formatted_text += f"### 创新性\n{json_data['novelty']}\n"
+
+    return formatted_text
+
+def sci_agent(save_path: str):
+    keyword1 = "quantum computing"
+    keyword2 = "machine learning"
+    # 初始化向量生成器
+    tokenizer_model = "BAAI/bge-large-en-v1.5"
+    vec_model = AutoModel.from_pretrained(tokenizer_model).to("cuda")
+    vec_tokenizer = AutoTokenizer.from_pretrained(tokenizer_model)
+    vec_gen = Vectorizer(model=vec_model, tokenizer=vec_tokenizer, backend="numpy", use_gpu=True)
+    # 初始化子图
+    neo4jTool = Neo4jTool(uri="bolt://localhost:7687", user="neo4j", password="test1234", threshold=0.97, vectorizer=vec_gen)
+    graph_path = neo4jTool.query_path(keyword1, keyword2)
+
+    ontologist_result = ontologist.invoke(ontologist.format_messages(
+        first_keyword=keyword1,
+        last_keyword=keyword2,
+        path_str=" -- ".join(graph_path))).content
+    
+    idea_generater_result = idea_generater.invoke(idea_generater.format_messages(
+        first_keyword=keyword1,
+        last_keyword=keyword2,
+        path_str=" -- ".join(graph_path),
+        ontologist_result=ontologist_result)).content
+    
+    idea_dict = safe_json_loads(idea_generater_result)
+    formatted_text = json_to_formatted_text(idea_dict)
+    idea_expanded_dict = {}
+    expanded_text = ''
+    for i, field in tqdm(enumerate (list (idea_dict.keys())[:7])):
+        print(f"[Info] Expanding field {i}: {field}")
+        field_content = idea_dict[field]
+        expanded_content = llm.invoke(idea_expander.format_messages(
+            idea=formatted_text,
+            first_keyword=keyword1,
+            last_keyword=keyword2,
+            path_str=" -- ".join(graph_path),
+            idea_field=field,
+            idea_content=field_content)).content
+        idea_expanded_dict[field] = expanded_content
+        expanded_text = expanded_text+f'\n\n'+expanded_content
+    complete=f"# '{keyword1}' 和 '{keyword2}'之间的概念研究\n\n### 知识图谱:\n\n{" -- ".join(graph_path)}\n\n"+f"### 拓展的图谱:\n\n{ontologist_result}"+f"### 提议的研究 / 材料:\n\n{formatted_text}"+f'\n\n### 拓展描述:\n\n'+expanded_text
+    critiques = critist.invoke(critist.format_messages(doc_text=complete)).content
+    complete_doc=complete+ f'\n\n## 摘要、批判性评审与改进建议:\n\n'+critiques
+    advice = adviser.invoke(adviser.format_messages(complete_doc=complete_doc)).content
+    complete_doc=complete_doc+ f'\n\n## 建模与模拟的重点方向:\n\n'+advice
+    #按时间给生成文件命名
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    save_path = save_path+f"/sci_agent_output_{timestamp}.md"
+    with open(save_path, "w", encoding="utf-8") as f:
+        f.write(complete_doc)
+    display (Markdown(complete_doc[:256]+"...."))
+
+
+
 
 if __name__ == "__main__":
     build_graph()
