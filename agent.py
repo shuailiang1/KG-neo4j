@@ -7,18 +7,19 @@ import json
 import torch
 import tqdm
 from llm import *
+from doi_utils import *
 from graph import MemorySubgraph, Vectorizer
 import numpy as np
 import queue
 from neo4j import GraphDatabase
-from neo4j_utils import Neo4jTool,CONCEPT_TYPE, CORPUS_TYPE, DOC_TYPE, RELATED_TO, BELONG_TO
+from neo4j_utils import Neo4jTool,ENTITY_TYPE, CHUNK_TYPE, DOC_TYPE, RELATED_TO, BELONG_TO
 from typing import List, Dict, Any, Optional, Union
 from transformers import AutoTokenizer, AutoModel
 from langchain_core.prompts import ChatPromptTemplate
 from IPython.display import display, Markdown
 from utils import safe_json_loads
 
-def process_text_to_triplets(text: str,queue: queue.Queue) -> str:
+def process_text_to_triplets(text_doi: str, text: str, queue: queue.Queue) -> str:
     try:
         raw_ontology = llm.invoke(make_graph_prompt.format_messages(context=text)).content
         print(f"[Info] process_text_to_raw_ontology: {raw_ontology}")
@@ -28,7 +29,8 @@ def process_text_to_triplets(text: str,queue: queue.Queue) -> str:
         print(f"[Info] process_text_to_formated_text: {formated_text}")
         triplets = json.loads(formated_text)
         for triplet in triplets:
-            queue.put(triplet)
+            data = {"text_doi": text_doi, "triplet": triplet}
+            queue.put(data)
     except Exception as e:
         print(f"[Error] process_text_to_triplets failed: {e}")
 
@@ -47,9 +49,9 @@ def make_graph_from_text(text: str, subgraph: MemorySubgraph) -> MemorySubgraph:
     # 添加三元组到子图
     for triplet in triplets:
         subgraph.add_triplet(
-            triplet["node_1"], CONCEPT_TYPE,
+            triplet["node_1"], ENTITY_TYPE,
             triplet["edge"], RELATED_TO,
-            triplet["node_2"], CONCEPT_TYPE
+            triplet["node_2"], ENTITY_TYPE
         )
     
     return subgraph
@@ -83,6 +85,16 @@ def build_graph():
                 content = f.read()
             display (Markdown(content[:256]+"...."))
 
+            doc_doi = generate_doi()
+            # 添加文档节点
+            subgraph.add_node(
+                node_type=DOC_TYPE,
+                name=os.path.basename(md_file),
+                abstract=content[:512],
+                doi=doc_doi,
+                data_type="markdown"
+            )
+
             # 使用文本分割器将长文本分割成多个小块
             splitter = RecursiveCharacterTextSplitter(
                 #chunk_size=5000, #1500,
@@ -92,12 +104,28 @@ def build_graph():
                 is_separator_regex=False,
             )
             texts = splitter.split_text(content)
-
+            textidx_doi_map = {idx: generate_doi() for idx, text in enumerate(texts)}
+            #添加chunk节点和BELONG_TO关系
+            for idx, text in enumerate(texts):              
+                text_doi = textidx_doi_map[idx]
+                subgraph.add_node(
+                    node_type=CHUNK_TYPE,
+                    name=f"Chunk {idx} of {os.path.basename(md_file)}",
+                    abstract=text[:512],
+                    doi=text_doi,
+                    data_type="text_chunk"
+                )
+                subgraph.add_edge(
+                    e1=text_doi,
+                    rel=BELONG_TO,
+                    e2=doc_doi,
+                    rel_type=BELONG_TO
+                )
             # 使用线程池并发处理每个文本块
             # 使用队列来收集结果
             q = queue.Queue()
             with ThreadPoolExecutor(max_workers=20) as executor:
-                futures = [executor.submit(process_text_to_triplets, text, q) for text in texts]
+                futures = [executor.submit(process_text_to_triplets,textidx_doi_map[idx], text, q) for idx,text in enumerate(texts)]
 
                 # 等待所有任务完成（可选，确保异常能抛出）
                 for future in as_completed(futures):
@@ -108,11 +136,27 @@ def build_graph():
             # process_text_to_triplets(texts[0], q)
             # 从队列中获取所有三元组并添加到内存子图
             while not q.empty():
-                triplet = q.get()
+                data = q.get()
+                text_doi = data["text_doi"]
+                triplet = data["triplet"]
+                #添加节点间的关系
                 subgraph.add_triplet(
-                    triplet["node_1"], CONCEPT_TYPE,
+                    triplet["node_1"], ENTITY_TYPE,
                     triplet["edge"], RELATED_TO,
-                    triplet["node_2"], CONCEPT_TYPE
+                    triplet["node_2"], ENTITY_TYPE
+                )
+                #添加节点和chunk的关系
+                subgraph.add_edge(
+                    e1=triplet["node_1"],
+                    rel=BELONG_TO,
+                    e2=text_doi,
+                    rel_type=BELONG_TO
+                )
+                subgraph.add_edge(
+                    e1=triplet["node_2"],
+                    rel=BELONG_TO,
+                    e2=text_doi,
+                    rel_type=BELONG_TO
                 )
             # 将子图插入到 Neo4j
 
@@ -189,7 +233,13 @@ def sci_agent(save_path: str):
             idea_content=field_content)).content
         idea_expanded_dict[field] = expanded_content
         expanded_text = expanded_text+f'\n\n'+expanded_content
-    complete=f"# '{keyword1}' 和 '{keyword2}'之间的概念研究\n\n### 知识图谱:\n\n{" -- ".join(graph_path)}\n\n"+f"### 拓展的图谱:\n\n{ontologist_result}"+f"### 提议的研究 / 材料:\n\n{formatted_text}"+f'\n\n### 拓展描述:\n\n'+expanded_text
+    complete = (
+        f"# '{keyword1}' 和 '{keyword2}'之间的概念研究\n\n"
+        f"### 知识图谱:\n\n{' -- '.join(graph_path)}\n\n"
+        f"### 拓展的图谱:\n\n{ontologist_result}"
+        f"### 提议的研究 / 材料:\n\n{formatted_text}"
+        f"\n\n### 拓展描述:\n\n{expanded_text}"
+    )
     critiques = critist.invoke(critist.format_messages(doc_text=complete)).content
     complete_doc=complete+ f'\n\n## 摘要、批判性评审与改进建议:\n\n'+critiques
     advice = adviser.invoke(adviser.format_messages(complete_doc=complete_doc)).content

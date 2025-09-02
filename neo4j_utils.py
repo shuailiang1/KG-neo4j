@@ -5,8 +5,8 @@ from graph import MemorySubgraph, Vectorizer
 import torch
 
 # Neo4j 节点类型常量
-CONCEPT_TYPE = "Concept"  # Neo4j 中的概念节点类型
-CORPUS_TYPE = "Corpus"  # Neo4j 中的语料库节点类型
+ENTITY_TYPE = "Entity"  # Neo4j 中的概念节点类型
+CHUNK_TYPE = "Chunk"  # Neo4j 中的语料库节点类型
 DOC_TYPE = "Document"  # Neo4j 中的文档节点类型
 # Neo4j 边类型常量
 RELATED_TO = "RELATED_TO"  # Neo4j 中的关系类型
@@ -104,7 +104,7 @@ class Neo4jTool:
         return rel_clean.upper()  # 关系类型一般习惯用大写
     def insert_subgraph(self, memory_subgraph: MemorySubgraph):
         """
-        将内存子图存入 Neo4j（自动去重）
+        将内存子图存入 Neo4j（自动去重，基于向量相似度）
         :param memory_subgraph: MemorySubgraph 实例
         """
         with self.driver.session() as session:
@@ -112,22 +112,38 @@ class Neo4jTool:
 
             # 处理节点，已做去重处理
             for node in memory_subgraph.get_nodes():
-                embedding = node.get("vector")
-                name = node.get("name")
                 mem_id = node.get("id")
-                node_type = node.get("type", CONCEPT_TYPE)  # 默认为 CONCEPT_TYPE
+                node_type = node.get("node_type", "Entity")   # 默认为 Entity
+                name = node.get("name", "")
+                abstract = node.get("abstract")
+                doi = node.get("doi")
+                data_type = node.get("data_type")
+                embedding = node.get("embedding")
 
                 neo4j_id = None
                 if embedding is not None:
                     neo4j_id = self._find_similar_node(embedding)
 
-                if neo4j_id:  # 已存在，复用
+                if neo4j_id:  
+                    # 已存在，复用
                     node_id_map[mem_id] = neo4j_id
-                else:  # 插入新节点
+                else:  
+                    # 插入新节点
                     result = session.run(f"""
-                    CREATE (c:{node_type} {{name: $name, embedding: $embedding}})
+                    CREATE (c:{node_type} {{
+                        name: $name,
+                        abstract: $abstract,
+                        doi: $doi,
+                        data_type: $data_type,
+                        embedding: $embedding
+                    }})
                     RETURN id(c) AS node_id
-                    """,name=name, embedding=embedding)
+                    """, 
+                    name=name,
+                    abstract=abstract,
+                    doi=doi,
+                    data_type=data_type,
+                    embedding=embedding if embedding is not None else None)
                     node_id_map[mem_id] = result.single()["node_id"]
 
             # 处理边
@@ -136,11 +152,11 @@ class Neo4jTool:
                 tgt = node_id_map[edge["target"]]
 
                 # 统一关系类型
-                rel_type = edge.get("type", RELATED_TO)
+                rel_type = edge.get("rel_type", "RELATED_TO")
 
-                # 把原始关系名存入属性，同时保留其他属性
-                props = {k: v for k, v in edge.items() if k not in ["source", "target"]}
-                props["relation"] = edge.get("relation", RELATED_TO)
+                # 保留边的其他属性
+                props = {k: v for k, v in edge.items() if k not in ["source", "target", "rel_type"]}
+                props["relation"] = edge.get("relation", "RELATED_TO")
 
                 session.run(f"""
                 MATCH (a),(b)
@@ -148,6 +164,7 @@ class Neo4jTool:
                 MERGE (a)-[r:{rel_type}]->(b)
                 SET r += $props
                 """, src=src, tgt=tgt, props=props)
+
 
     
     def _get_embedding(self, text: str) -> List[float]:

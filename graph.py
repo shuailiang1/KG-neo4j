@@ -106,16 +106,40 @@ class MemorySubgraph:
         e1_id = self._find_similar_node(vec1) if (self.use_vector and vec1 is not None) else None
         if not e1_id:
             e1_id = e1
-            self.graph.add_node(e1_id, name=e1, type=e1_type, vector=vec1 if self.use_vector else None)
+            self.graph.add_node(e1_id, name=e1, type=e1_type, embedding=vec1 if self.use_vector else None)
 
         # 检查 e2 是否已有相似节点
         e2_id = self._find_similar_node(vec2) if (self.use_vector and vec2 is not None) else None
         if not e2_id:
             e2_id = e2
-            self.graph.add_node(e2_id, name=e2, type=e2_type, vector=vec2 if self.use_vector else None)
+            self.graph.add_node(e2_id, name=e2, type=e2_type, embedding=vec2 if self.use_vector else None)
 
         # 添加关系
-        self.graph.add_edge(e1_id, e2_id, relation=rel, type=rel_type)
+        self.graph.add_edge(e1_id, e2_id, relation=rel, rel_type=rel_type)
+
+
+    def add_node(self, node_type:str,name:str,abstract:str,doi:str,data_type:str,vec: Optional[Union[np.ndarray, "torch.Tensor"]] = None):
+        """
+        添加doc节点
+        如果 use_vector=True 且未传 vec，会调用 vectorizer.encode(e) 生成
+        """
+        if self.use_vector:
+            if vec==None and self.vectorizer:
+                vec = self.vectorizer.encode(abstract)
+        if node_type != "ENTITY":
+            node_id = doi
+        else :
+            node_id = name
+        self.graph.add_node(node_id, node_type=node_type,name=name, abstract=abstract,doi=doi,data_type=data_type, embedding=vec if self.use_vector else None)
+
+    def add_edge(self, e1: str, rel: str, e2: str, rel_type: str):
+        """
+        添加边 (e1 -rel-> e2)
+        """
+        if self.graph.has_node(e1) and self.graph.has_node(e2):
+            self.graph.add_edge(e1, e2, relation=rel, rel_type=rel_type)
+        else:
+            raise ValueError(f"One or both nodes not found in graph: {e1}, {e2}")
 
     def get_nodes(self) -> List[Dict[str, Any]]:
         return [{**{"id": n}, **d} for n, d in self.graph.nodes(data=True)]
