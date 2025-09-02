@@ -139,6 +139,8 @@ class Neo4jTool:
             for edge in memory_subgraph.get_edges():
                 src = node_id_map[edge["source"]]
                 tgt = node_id_map[edge["target"]]
+                if src == tgt:
+                    continue  # 跳过自环
 
                 # 统一关系类型
                 rel_type = edge.get("rel_type", "RELATED_TO")
