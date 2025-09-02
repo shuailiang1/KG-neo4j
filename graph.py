@@ -68,6 +68,10 @@ class MemorySubgraph:
         self.similarity_threshold = similarity_threshold
         self.use_vector = use_vector
         self.vectorizer = vectorizer
+    
+    def clear(self):
+        """清空图谱"""
+        self.graph.clear()
 
     def _cosine_similarity(self, v1, v2) -> float:
         """支持 numpy 和 torch 的余弦相似度"""

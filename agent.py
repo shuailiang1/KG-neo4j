@@ -161,6 +161,7 @@ def build_graph():
             # 将子图插入到 Neo4j
 
             neo4jTool.insert_subgraph(subgraph)
+            subgraph.clear()
             # 在日志中记录已经处理的文件名
             with open("processed_files.log", "a") as log_file:
                 log_file.write(f"{md_file}\n")

@@ -30,11 +30,11 @@ class Neo4jTool:
         self.driver.close()
 
     def _ensure_vector_index(self):
-        """确保 Concept 节点的向量索引存在"""
+        """确保 Entity 节点的向量索引存在"""
         query = """
         CREATE VECTOR INDEX concept_embedding_index
         IF NOT EXISTS
-        FOR (c:Concept) ON (c.embedding)
+        FOR (c:Entity) ON (c.embedding)
         OPTIONS { indexConfig: {
             `vector.dimensions`: 1024,
             `vector.similarity_function`: 'cosine'
@@ -51,7 +51,7 @@ class Neo4jTool:
         """
         with self.driver.session() as session:
             result = session.run("""
-            CALL db.index.vector.queryNodes('concept_embedding_index', 1, $embedding)
+            CALL db.index.vector.queryNodes('entity_embedding_index', 1, $embedding)
             YIELD node, score
             WHERE score >= $threshold
             RETURN id(node) AS node_id, score
@@ -66,7 +66,7 @@ class Neo4jTool:
         """
         with self.driver.session() as session:
             result = session.run("""
-            CALL db.index.vector.queryNodes('concept_embedding_index', 1, $embedding)
+            CALL db.index.vector.queryNodes('entity_embedding_index', 1, $embedding)
             YIELD node, score
             WHERE score >= $threshold
             RETURN node
@@ -82,7 +82,7 @@ class Neo4jTool:
         embedding = self._get_embedding(name)
         with self.driver.session() as session:
             result = session.run("""
-            CALL db.index.vector.queryNodes('concept_embedding_index', 1, $embedding)
+            CALL db.index.vector.queryNodes('entity_embedding_index', 1, $embedding)
             YIELD node, score
             WHERE score >= $threshold
             RETURN node
@@ -114,11 +114,10 @@ class Neo4jTool:
             for node in memory_subgraph.get_nodes():
                 mem_id = node.get("id")
                 node_type = node.get("node_type", "Entity")   # 默认为 Entity
-                name = node.get("name", "")
-                abstract = node.get("abstract")
-                doi = node.get("doi")
-                data_type = node.get("data_type")
                 embedding = node.get("embedding")
+
+                # 整理节点属性（统一用 props 存储）
+                props = {k: v for k, v in node.items() if k not in ["id", "node_type"]}
 
                 neo4j_id = None
                 if embedding is not None:
@@ -128,22 +127,12 @@ class Neo4jTool:
                     # 已存在，复用
                     node_id_map[mem_id] = neo4j_id
                 else:  
-                    # 插入新节点
+                    # 插入新节点，直接用 props
                     result = session.run(f"""
-                    CREATE (c:{node_type} {{
-                        name: $name,
-                        abstract: $abstract,
-                        doi: $doi,
-                        data_type: $data_type,
-                        embedding: $embedding
-                    }})
+                    CREATE (c:{node_type})
+                    SET c += $props
                     RETURN id(c) AS node_id
-                    """, 
-                    name=name,
-                    abstract=abstract,
-                    doi=doi,
-                    data_type=data_type,
-                    embedding=embedding if embedding is not None else None)
+                    """, props=props)
                     node_id_map[mem_id] = result.single()["node_id"]
 
             # 处理边
@@ -180,12 +169,12 @@ class Neo4jTool:
 
         # 找到最相似的起点和终点节点
         start_node = self.driver.execute_query(
-            "CALL db.index.vector.queryNodes('concept_embedding_index', 1, $vec) YIELD node, score RETURN node",
-            {"vec": start_emb}
+            "CALL db.index.vector.queryNodes('entity_embedding_index', 1, $embedding) YIELD node, score RETURN node",
+            {"embedding": start_emb}
         ).records[0]["node"] 
         end_node = self.driver.execute_query(
-            "CALL db.index.vector.queryNodes('concept_embedding_index', 1, $vec) YIELD node, score RETURN node",
-            {"vec": end_emb}
+            "CALL db.index.vector.queryNodes('entity_embedding_index', 1, $embedding) YIELD node, score RETURN node",
+            {"embedding": end_emb}
         ).records[0]["node"] 
 
         if not start_node or not end_node:
@@ -197,12 +186,12 @@ class Neo4jTool:
         with self.driver.session() as session:
             if mode == "shortest":
                 query = f"""
-                    MATCH p=shortestPath((a:Concept {{name:$start}})-[*..{max_depth}]-(b:Concept {{name:$end}}))
+                    MATCH p=shortestPath((a:Entity {{name:$start}})-[*..{max_depth}]-(b:Entity {{name:$end}}))
                     RETURN p
                 """
             elif mode == "random":
                 query = f"""
-                MATCH p=(a:Concept {{name:$start}})-[*..{max_depth}]-(b:Concept {{name:$end}})
+                MATCH p=(a:Entity {{name:$start}})-[*..{max_depth}]-(b:Entity {{name:$end}})
                 WITH p, rand() AS r
                 RETURN p ORDER BY r LIMIT 1
                 """
