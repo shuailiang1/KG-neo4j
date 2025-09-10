@@ -161,7 +161,7 @@ class Neo4jTool:
     def _get_embedding(self, text: str) -> List[float]:
         return self.vectorizer.encode(text).tolist() 
 
-    def query_path(self, start_text, end_text, mode="random", max_depth=64) -> List[str]:
+    def query_path(self, start_text, end_text, mode="random", max_depth=10) -> List[str]:
         """
         查询路径（最短路径 or 随机路径）
         返回路径的节点与边列表
@@ -187,19 +187,29 @@ class Neo4jTool:
 
         with self.driver.session() as session:
             if mode == "shortest":
+                # shortestPath 没法直接用 labelFilter，所以这里还是用原生
                 query = f"""
                     MATCH p=shortestPath((a:Entity {{name:$start}})-[*..{max_depth}]-(b:Entity {{name:$end}}))
+                    WHERE ALL(n IN nodes(p) WHERE n:Entity)
                     RETURN p
                 """
             elif mode == "random":
+                # 用 APOC expandConfig，直接剪枝非 Entity 节点
                 query = f"""
-                MATCH p=(a:Entity {{name:$start}})-[*..{max_depth}]-(b:Entity {{name:$end}})
+                MATCH (a:Entity {{name:$start}}), (b:Entity {{name:$end}})
+                CALL apoc.path.expandConfig(a, {{
+                    minLevel: 1,
+                    maxLevel: {max_depth},
+                    labelFilter: "+Entity",
+                    terminatorNodes: [b],
+                    bfs: true
+                }}) YIELD path AS p
                 WITH p, rand() AS r
                 RETURN p ORDER BY r LIMIT 1
                 """
             else:
                 raise ValueError("mode 必须是 'shortest' 或 'random'")
-            
+
             result = session.run(query, start=start_name, end=end_name)
             paths = []
             for record in result:
@@ -211,11 +221,12 @@ class Neo4jTool:
                 for i in range(len(nodes)):
                     # 先加入节点 name
                     path_list.append(nodes[i]["name"])
-                    # 如果有对应的边，加入边的内容（可以选择边的 type 或属性）
+                    # 如果有对应的边，加入边的内容
                     if i < len(rels):
-                        # 这里我把边的 type 和所有属性都放成字典
-                        edge_info = rels[i]["relation"]
+                        edge_info = rels[i]["relation"] if "relation" in rels[i] else rels[i].type
                         path_list.append(edge_info)
 
                 paths.append(path_list)
-            return paths if paths else None
+
+            return paths[0] if paths else None
+

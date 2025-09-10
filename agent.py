@@ -196,8 +196,8 @@ def json_to_formatted_text(json_data):
     return formatted_text
 
 def sci_agent(save_path: str):
-    keyword1 = "quantum computing"
-    keyword2 = "machine learning"
+    keyword1 = "name: 5.5 mW·cm⁻²"
+    keyword2 = "name: maximum power density"
     # 初始化向量生成器
     tokenizer_model = "BAAI/bge-large-en-v1.5"
     vec_model = AutoModel.from_pretrained(tokenizer_model).to("cuda")
@@ -207,12 +207,12 @@ def sci_agent(save_path: str):
     neo4jTool = Neo4jTool(uri="bolt://localhost:7687", user="neo4j", password="test1234", threshold=0.97, vectorizer=vec_gen)
     graph_path = neo4jTool.query_path(keyword1, keyword2)
 
-    ontologist_result = ontologist.invoke(ontologist.format_messages(
+    ontologist_result = llm.invoke(ontologist.format_messages(
         first_keyword=keyword1,
         last_keyword=keyword2,
         path_str=" -- ".join(graph_path))).content
     
-    idea_generater_result = idea_generater.invoke(idea_generater.format_messages(
+    idea_generater_result = llm.invoke(idea_generater.format_messages(
         first_keyword=keyword1,
         last_keyword=keyword2,
         path_str=" -- ".join(graph_path),
@@ -241,9 +241,9 @@ def sci_agent(save_path: str):
         f"### 提议的研究 / 材料:\n\n{formatted_text}"
         f"\n\n### 拓展描述:\n\n{expanded_text}"
     )
-    critiques = critist.invoke(critist.format_messages(doc_text=complete)).content
+    critiques = llm.invoke(critist.format_messages(doc_text=complete)).content
     complete_doc=complete+ f'\n\n## 摘要、批判性评审与改进建议:\n\n'+critiques
-    advice = adviser.invoke(adviser.format_messages(complete_doc=complete_doc)).content
+    advice = llm.invoke(adviser.format_messages(complete_doc=complete_doc)).content
     complete_doc=complete_doc+ f'\n\n## 建模与模拟的重点方向:\n\n'+advice
     #按时间给生成文件命名
     timestamp = time.strftime("%Y%m%d-%H%M%S")
@@ -256,5 +256,6 @@ def sci_agent(save_path: str):
 
 
 if __name__ == "__main__":
-    build_graph()
+    # build_graph()
+    sci_agent(save_path="/home/liang/KG-neo4j/output")
     
